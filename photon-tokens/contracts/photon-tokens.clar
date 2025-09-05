@@ -127,6 +127,12 @@
   }
 )
 
+;; Helper Functions
+(define-private (calculate-lum-tokens (amount uint) (category (string-ascii 50)))
+  ;; Simple token calculation - could be enhanced with category-based multipliers
+  (/ (* amount u100) u1000000) ;; 0.01% conversion rate
+)
+
 ;; Owner Functions
 (define-public (set-platform-fee-rate (new-rate uint))
   (begin
@@ -145,7 +151,7 @@
 
 (define-public (set-quantum-protocol-status (active bool))
   (begin
-    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-AUTHORIZED)
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-UNAUTHORIZED) ;; Fixed: was ERR-AUTHORIZED
     (ok (var-set quantum-protocol-active active))
   )
 )
@@ -297,5 +303,77 @@
     (project (unwrap! (map-get? projects project-id) ERR-PROJECT-NOT-FOUND))
     (sensor-data (unwrap! (map-get? sensor-data-registry sensor-data-hash) ERR-SENSOR-DATA-INVALID))
     (validation-key {validator: tx-sender, project-id: project-id, milestone: milestone})
+    (existing-validation (map-get? project-validations validation-key))
   )
-    (asserts! (> (get staked-amount validator-stake) u0) ERR-INSUFFICIENT-
+    (asserts! (> (get staked-amount validator-stake) u0) ERR-INSUFFICIENT-STAKE)
+    (asserts! (get active project) ERR-PROJECT-INACTIVE)
+    (asserts! (is-eq (get current-milestone project) milestone) ERR-INVALID-MILESTONE)
+    (asserts! (is-none existing-validation) ERR-ALREADY-VALIDATED)
+    (asserts! (< (- block-height (get timestamp sensor-data)) VALIDATION-WINDOW) ERR-VALIDATION-EXPIRED)
+    
+    ;; Record validation
+    (map-set project-validations validation-key
+      {
+        validation-result: validation-result,
+        sensor-data-hash: sensor-data-hash,
+        validation-block: block-height,
+        stake-amount: (get staked-amount validator-stake),
+        processed: false
+      }
+    )
+    
+    ;; Update validator stats
+    (map-set validator-stakes tx-sender
+      (merge validator-stake {
+        active-validations: (+ (get active-validations validator-stake) u1),
+        last-validation-block: block-height
+      })
+    )
+    
+    ;; Update sensor data verification count
+    (map-set sensor-data-registry sensor-data-hash
+      (merge sensor-data {
+        verification-count: (+ (get verification-count sensor-data) u1)
+      })
+    )
+    
+    (ok true)
+  )
+)
+
+;; Read-only Functions
+(define-read-only (get-project (project-id uint))
+  (map-get? projects project-id)
+)
+
+(define-read-only (get-project-milestone (project-id uint) (milestone uint))
+  (map-get? project-milestones {project-id: project-id, milestone: milestone})
+)
+
+(define-read-only (get-validator-stake (validator principal))
+  (map-get? validator-stakes validator)
+)
+
+(define-read-only (get-user-contribution (user principal) (project-id uint))
+  (map-get? user-contributions {user: user, project-id: project-id})
+)
+
+(define-read-only (get-sensor-data (data-hash (buff 32)))
+  (map-get? sensor-data-registry data-hash)
+)
+
+(define-read-only (get-total-projects)
+  (var-get total-projects)
+)
+
+(define-read-only (get-platform-fee-rate)
+  (var-get platform-fee-rate)
+)
+
+(define-read-only (is-emergency-paused)
+  (var-get emergency-pause)
+)
+
+(define-read-only (get-token-balance (user principal))
+  (ft-get-balance luminosity-token user)
+)
